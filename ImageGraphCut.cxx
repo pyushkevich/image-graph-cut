@@ -2,6 +2,10 @@
 #include "METISTools.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
+#include "itkConnectedComponentImageFilter.h"
+#include "itkRelabelComponentImageFilter.h"
+#include "itkImageRegionConstIterator.h"
+#include "itkBinaryThresholdImageFilter.h"
 
 using namespace std;
 using namespace itk;
@@ -21,6 +25,9 @@ int usage()
   "\n                       Must be >= 1. Larger values means more flexibility"
   "\n                       for non-equal partitions"
   "\n   -n number           Number of iterations of internal METIS optimization"
+  "\n   -c N frac           Allow up to N connected components in the input image "
+  "\n                       rejecting components smaller than frac of total foreground"
+  "\n                       each component will be handled separately"
   "\nhint files: " 
   "\n   The hint file is used to convert an image into a graph. It specifies "
   "\n   the weights assigned to the vertices and edges in the graph based on"
@@ -165,6 +172,8 @@ int main(int argc, char *argv[])
   bool flagOptimize = false;
   float tolerance = 1.001;
   int nMetisIter = 1;
+  int max_comp = 1;
+  double min_comp_frac = 0.0;
   
   // Read the options
   for(unsigned int iArg=1;iArg<argc-3;iArg++)
@@ -205,6 +214,11 @@ int main(int argc, char *argv[])
       {
       nMetisIter = atoi(argv[++iArg]);
       }
+    else if(!strcmp(argv[iArg], "-c"))
+      {
+      max_comp = atoi(argv[++iArg]);
+      min_comp_frac = atof(argv[++iArg]);
+      }
     else
       {
       cerr << "unknown option!" << endl;
@@ -238,53 +252,120 @@ int main(int argc, char *argv[])
   fltReader->Update();
   ImageType::Pointer img = fltReader->GetOutput();
 
-  cout << "   image has dimensions " << img->GetBufferedRegion().GetSize() 
-    << ", nPixels = " << img->GetBufferedRegion().GetNumberOfPixels() << endl;
+  // Extract connected components
+  typedef itk::ConnectedComponentImageFilter<ImageType, ImageType> ConnFilter;
+  ConnFilter::Pointer conn_filter = ConnFilter::New();
+  conn_filter->SetInput(img);
+  conn_filter->Update();
+  conn_filter->SetFullyConnected(false);
 
-  // Begin converting the image to a graph
-  cout << "converting image to graph structure" << endl;
+  typedef itk::RelabelComponentImageFilter<ImageType, ImageType> RelabelFilter;
+  RelabelFilter::Pointer relabel_filter = RelabelFilter::New();
+  relabel_filter->SetInput(conn_filter->GetOutput());
+  relabel_filter->Update();
+  ImageType::Pointer comp_map_image = relabel_filter->GetOutput();
 
-  // Create the weight functor
-  MyWeightFunctor fnWeight;
-  
-  // Create the graph filter
-  typedef ImageToGraphFilter<ImageType,idxtype> GraphFilter;
-  GraphFilter::Pointer fltGraph = GraphFilter::New();
-  fltGraph->SetInput(img);
-  fltGraph->SetWeightFunctor(&fnWeight);
-  fltGraph->Update();
-
-  // If asked to optimize, compute the best set of weights
-  if(flagOptimize)
+  // Get a list of connected components and their size
+  unsigned int hist_size = max_comp + 1;
+  std::vector<unsigned int> comp_histogram(hist_size, 0);
+  unsigned int n_total = 0;
+  for(itk::ImageRegionConstIterator<ImageType> it(comp_map_image, comp_map_image->GetBufferedRegion());
+      !it.IsAtEnd(); ++it)
     {
-    // Run the experimental optimization
-    xWeights = OptimizeMETISPartition(fltGraph, xWeights);
+    short val = it.Value();
+    if(val > 0 && val < hist_size)
+      {
+      comp_histogram[val]++;
+      n_total++;
+      }
     }
 
-  // Run METIS once, using the specified weights
-  cout << "Running METIS ... " << xWeights << flush; 
-  int *iPartition = new int[fltGraph->GetNumberOfVertices()];
-  int xCut = RunMETISPartition<ImageType>(
-    fltGraph, xWeights.size(), xWeights.data_block(), iPartition, 
-    tolerance, nMetisIter, false);
-  cout << "done. Cut value = " << xCut << endl;
+  // Compute the total number of pixels and proportion of each component
+  std::map<short, unsigned int> comp_parts;
+  for(unsigned int i = 1; i < hist_size; i++)
+    {
+    double frac = comp_histogram[i] * 1.0 / n_total;
+    if(frac >= min_comp_frac)
+      {
+      int n_parts = std::max(1, (int)(0.5 + nParts * frac));
+      comp_parts[i] = n_parts;
+      std::cout << "Keeping component " << i << " fraction " << frac << " parts " << n_parts << endl;
+      }
+    }
 
-  // Create output image 
+  cout << "   image has dimensions " << img->GetBufferedRegion().GetSize()
+       << ", nPixels = " << img->GetBufferedRegion().GetNumberOfPixels()
+       << ", nComp = " << comp_parts.size() << endl;
+
+  // Create output image
   ImageType::Pointer imgOut = ImageType::New();
   imgOut->SetRegions(img->GetBufferedRegion());
   imgOut->CopyInformation(img);
   imgOut->Allocate();
   imgOut->FillBuffer(0);
-    
-  // Apply partition to output image
-  for(unsigned int iVertex = 0; iVertex < fltGraph->GetNumberOfVertices(); iVertex++)
-    {
-    GraphFilter::IndexType idx = fltGraph->GetVertexImageIndex(iVertex);
-    imgOut->SetPixel(idx, iPartition[iVertex] + 1);
-    }
 
-  // Delete the partition
-  delete [] iPartition;
+  // Repeat for each component
+  unsigned int part_idx = 1;
+  for(auto comp : comp_parts)
+    {
+    typedef itk::BinaryThresholdImageFilter<ImageType, ImageType> ThreshFilter;
+    ThreshFilter::Pointer fltThresh = ThreshFilter::New();
+    fltThresh->SetLowerThreshold(comp.first);
+    fltThresh->SetUpperThreshold(comp.first);
+    fltThresh->SetInsideValue(1);
+    fltThresh->SetOutsideValue(0);
+    fltThresh->SetInput(comp_map_image);
+    fltThresh->Update();
+
+    // This is the image that we will partition now
+    ImageType::Pointer comp_image = fltThresh->GetOutput();
+
+    // Use the relative weights only if number of components matches
+    auto compWeights = (xWeights.size() == comp.second)
+        ? xWeights
+        : vnl_vector<float>(comp.second, 1.0/comp.second);
+
+    cout << "   Breaking component " << comp.first << " into " << comp.second << " parts. " << endl;
+    cout << "      Initial weights: " << compWeights << endl;
+
+    // Create the weight functor
+    MyWeightFunctor fnWeight;
+
+    // Create the graph filter
+    typedef ImageToGraphFilter<ImageType,idxtype> GraphFilter;
+    GraphFilter::Pointer fltGraph = GraphFilter::New();
+    fltGraph->SetInput(comp_image);
+    fltGraph->SetWeightFunctor(&fnWeight);
+    fltGraph->Update();
+
+    // If asked to optimize, compute the best set of weights
+    if(flagOptimize)
+      {
+      // Run the experimental optimization
+      compWeights = OptimizeMETISPartition(fltGraph, compWeights);
+      cout << "      Optimized weights: " << compWeights << endl;
+      }
+
+    // Run METIS once, using the specified weights
+    int *iPartition = new int[fltGraph->GetNumberOfVertices()];
+    int xCut = RunMETISPartition<ImageType>(
+      fltGraph, compWeights.size(), compWeights.data_block(), iPartition,
+      tolerance, nMetisIter, false);
+    cout << "      Cut value: " << xCut << endl;
+
+    // Apply partition to output image
+    for(unsigned int iVertex = 0; iVertex < fltGraph->GetNumberOfVertices(); iVertex++)
+      {
+      GraphFilter::IndexType idx = fltGraph->GetVertexImageIndex(iVertex);
+      imgOut->SetPixel(idx, iPartition[iVertex] + part_idx);
+      }
+
+    // Delete the partition
+    delete [] iPartition;
+
+    // Update the starting part
+    part_idx += comp.second;
+    }
     
   // Write the image
   cout << "writing output image" << endl;
