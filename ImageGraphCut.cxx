@@ -327,44 +327,59 @@ int main(int argc, char *argv[])
 
     cout << "   Breaking component " << comp.first << " into " << comp.second << " parts. " << endl;
     cout << "      Initial weights: " << compWeights << endl;
+    cout << "      Starting part is: " << part_idx << endl;
 
-    // Create the weight functor
-    MyWeightFunctor fnWeight;
-
-    // Create the graph filter
-    typedef ImageToGraphFilter<ImageType,idxtype> GraphFilter;
-    GraphFilter::Pointer fltGraph = GraphFilter::New();
-    fltGraph->SetInput(comp_image);
-    fltGraph->SetWeightFunctor(&fnWeight);
-    fltGraph->Update();
-
-    // If asked to optimize, compute the best set of weights
-    if(flagOptimize)
+    unsigned int max_part=1;
+    if(comp.second > 1)
       {
-      // Run the experimental optimization
-      compWeights = OptimizeMETISPartition(fltGraph, compWeights);
-      cout << "      Optimized weights: " << compWeights << endl;
+      // Create the weight functor
+      MyWeightFunctor fnWeight;
+
+      // Create the graph filter
+      typedef ImageToGraphFilter<ImageType,idxtype> GraphFilter;
+      GraphFilter::Pointer fltGraph = GraphFilter::New();
+      fltGraph->SetInput(comp_image);
+      fltGraph->SetWeightFunctor(&fnWeight);
+      fltGraph->Update();
+
+      // If asked to optimize, compute the best set of weights
+      if(flagOptimize)
+        {
+        // Run the experimental optimization
+        compWeights = OptimizeMETISPartition(fltGraph, compWeights);
+        cout << "      Optimized weights: " << compWeights << endl;
+        }
+
+      // Run METIS once, using the specified weights
+      int *iPartition = new int[fltGraph->GetNumberOfVertices()];
+      int xCut = RunMETISPartition<ImageType>(
+        fltGraph, compWeights.size(), compWeights.data_block(), iPartition,
+        tolerance, nMetisIter, false);
+      cout << "      Cut value: " << xCut << endl;
+
+      // Apply partition to output image
+      for(unsigned int iVertex = 0; iVertex < fltGraph->GetNumberOfVertices(); iVertex++)
+        {
+        GraphFilter::IndexType idx = fltGraph->GetVertexImageIndex(iVertex);
+        imgOut->SetPixel(idx, iPartition[iVertex] + part_idx);
+	max_part = std::max(max_part, (unsigned int ) iPartition[iVertex]);
+        }
+
+      // Delete the partition
+      delete [] iPartition;
+      }
+    else
+      {
+      typedef itk::ImageRegionIterator<ImageType> IterType;
+      IterType it_src(comp_image, comp_image->GetBufferedRegion());
+      IterType it_dst(imgOut, imgOut->GetBufferedRegion());
+      for(; !it_src.IsAtEnd(); ++it_src, ++it_dst)
+        if(it_src.Value() > 0)
+          it_dst.Set(part_idx+1);
       }
 
-    // Run METIS once, using the specified weights
-    int *iPartition = new int[fltGraph->GetNumberOfVertices()];
-    int xCut = RunMETISPartition<ImageType>(
-      fltGraph, compWeights.size(), compWeights.data_block(), iPartition,
-      tolerance, nMetisIter, false);
-    cout << "      Cut value: " << xCut << endl;
-
-    // Apply partition to output image
-    for(unsigned int iVertex = 0; iVertex < fltGraph->GetNumberOfVertices(); iVertex++)
-      {
-      GraphFilter::IndexType idx = fltGraph->GetVertexImageIndex(iVertex);
-      imgOut->SetPixel(idx, iPartition[iVertex] + part_idx);
-      }
-
-    // Delete the partition
-    delete [] iPartition;
-
-    // Update the starting part
-    part_idx += comp.second;
+      // Update the starting part
+      part_idx += max_part;
     }
     
   // Write the image
