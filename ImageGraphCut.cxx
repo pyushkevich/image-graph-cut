@@ -375,11 +375,11 @@ int main(int argc, char *argv[])
       IterType it_dst(imgOut, imgOut->GetBufferedRegion());
       for(; !it_src.IsAtEnd(); ++it_src, ++it_dst)
         if(it_src.Value() > 0)
-          it_dst.Set(part_idx+1);
+          it_dst.Set(part_idx);
       }
 
       // Update the starting part
-      part_idx += max_part;
+      part_idx += max_part + 1;
     }
     
   // Write the image
