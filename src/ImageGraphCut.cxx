@@ -1,4 +1,5 @@
 #include <iostream>
+#include "ImageGraphCut.h"
 #include "METISTools.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -9,47 +10,6 @@
 
 using namespace std;
 using namespace itk;
-
-int usage()
-{
-  const char *usage = 
-  "usage: metisseg [options] input.img output.img num_part" 
-  "\n   uses METIS to segment a binary image into num_part partitions" 
-  "\noptions: " 
-  "\n   -w X.X X.X          Specify relative weights of the partitions" 
-  "\n   -t file.txt         Specify the intensity->graph hint file (see below) " 
-  "\n   -p N1 N2 N3         define cut plane at dimension N1, slice N2" 
-  "\n                       with relative edge strength N3" 
-  "\n   -o                  use optimization to refine partition weights" 
-  "\n   -u float            Load imbalance tolerance (ubvec in METIS). "
-  "\n                       Must be >= 1. Larger values means more flexibility"
-  "\n                       for non-equal partitions"
-  "\n   -n number           Number of iterations of internal METIS optimization"
-  "\n   -c N frac           Allow up to N connected components in the input image "
-  "\n                       rejecting components smaller than frac of total foreground"
-  "\n                       each component will be handled separately"
-  "\nhint files: " 
-  "\n   The hint file is used to convert an image into a graph. It specifies "
-  "\n   the weights assigned to the vertices and edges in the graph based on"
-  "\n   the intensities of the pixels that connect the edges. The vertex "
-  "\n   weight of zero means that the pixels with a given intensity are not"
-  "\n   included in the graph. The hint file contains the following types of"
-  "\n   entries."
-  "\n   "
-  "\n     V int wgt"
-  "\n     E int1 int2 wgt"
-  "\n   "
-  "\n   The first entry specifies vertex weights. The second specifies edge "
-  "\n   weights. You can use asterisk (*) as a wildcard for any intensity value."
-  "\n   Weights can be specified as an integer value, or as a randomly generated"
-  "\n   value. For the latter, use the notation 'U n1 n2' for the uniform dist."
-  "\n   and 'N n1 n2' for the normal dist. with mean n1 and s.d. n2. The order in"
-  "\n   which the rules are specified matters, as the later rules replace the"
-  "\n   earlier ones.";
-  
-  cout << usage << endl;
-  return -1;
-}
 
 /* ***************************************************************************
  * GLOBAL TYPE DEFINITIONS
@@ -71,21 +31,21 @@ public:
 
   /** Check inclusion */
   virtual bool IsPixelAVertex(short i1)
-    {
+  {
     return i1 != 0;
-    }
+  }
   
   /** Compute edge weight */
   virtual int GetEdgeWeight(short i1, short i2)
-    {
+  {
     return 1;
-    }
-      
+  }
+
   /** Compute vertex weight */
   virtual int GetVertexWeight(short i1)
-    {
+  {
     return 1;
-    }
+  }
 };
 
 /* ***************************************************************************
@@ -95,31 +55,31 @@ template<class T, class S>
 void VerifyGraph(int n, T *ai, T *a, S *wv, S *we)
 {
   for(T i=0; i < n; i++)
-    {
+  {
     T k = ai[i+1] - ai[i];
     for(T j=0;j < k;j++)
-      {
+    {
       // Neighbor of i
       T m = a[ai[i] + j];
       S w = we[ai[i] + j];
 
-      // Check the match
+             // Check the match
       T l = ai[m+1] - ai[m];
       bool match = false;
       for(T p=0;p < l;p++)
         if(a[ai[m]+p] == i && we[ai[m]+p] == w)
-          { match = true; break; }
+        { match = true; break; }
 
       if(!match)
-        {
+      {
         cout << "Mismatch at node " << i << " edge to " << m << " weight " << w << endl;
-        }
+      }
       if(w <= 0 || w > 1000 || wv[i] <= 0 || wv[i] > 1000)
-        {
+      {
         cout << " bad weight" << i << endl;
-        }
       }
     }
+  }
 }
 
 Vec OptimizeMETISPartition(GraphFilter *fltGraph, const Vec &xWeights)
@@ -150,97 +110,36 @@ Vec OptimizeMETISPartition(GraphFilter *fltGraph, const Vec &xWeights)
   Vec xResult(xWeights.size(), 0.0);
   xResult[xWeights.size() - 1] = 1.0;
   for(unsigned int i = 0; i < xWeights.size() - 1; i++)
-    {
+  {
     xResult[i] = x[i];
     xResult[xWeights.size() - 1] -= x[i];
-    }
+  }
   
   return xResult;
 }
 
 
-int main(int argc, char *argv[])
+int image_graph_cut(const ImageGraphCutParameters &p)
 {
-  // Check arguments
-  if(argc < 4) return usage();
-
-  // Variables to hold command line arguments
-  string fnInput(argv[argc-3]), fnOutput(argv[argc-2]);
-  int nParts = atoi(argv[argc-1]);
-  vnl_vector<float> xWeights(nParts,1.0 / nParts);
-  int iPlaneDim = -1, iPlaneSlice = -1, iPlaneStrength = 10;
-  bool flagOptimize = false;
-  float tolerance = 1.001;
-  int nMetisIter = 1;
-  int max_comp = 1;
-  double min_comp_frac = 0.0;
-  
-  // Read the options
-  for(unsigned int iArg=1;iArg<argc-3;iArg++)
-    {
-    if(!strcmp(argv[iArg],"-w"))
-      {
-      unsigned int iPart = atoi(argv[++iArg]);
-      double xWeightPart = atof(argv[++iArg]);
-      if(iPart < nParts)
-        {
-        xWeights[iPart] = xWeightPart;
-        }
-      else
-        {
-        cerr << "Incorrent index in -w parameter" << endl;
-        return usage();
-        }
-      }
-    else if(!strcmp(argv[iArg],"-p"))
-      {
-      iPlaneDim = atoi(argv[++iArg]);
-      iPlaneSlice = atoi(argv[++iArg]);
-      iPlaneStrength = atoi(argv[++iArg]);
-      }
-    else if(!strcmp(argv[iArg],"-o"))
-      {
-      flagOptimize = true;
-      }
-    else if(!strcmp(argv[iArg],"-seed"))
-      {
-      srand(atoi(argv[++iArg]));
-      }
-    else if(!strcmp(argv[iArg], "-u"))
-      {
-      tolerance = atof(argv[++iArg]);
-      }
-    else if(!strcmp(argv[iArg], "-n"))
-      {
-      nMetisIter = atoi(argv[++iArg]);
-      }
-    else if(!strcmp(argv[iArg], "-c"))
-      {
-      max_comp = atoi(argv[++iArg]);
-      min_comp_frac = atof(argv[++iArg]);
-      }
-    else
-      {
-      cerr << "unknown option!" << endl;
-      return usage();
-      }
-    }
+  // Set random seed
+  if(p.use_random_seed)
+    srand(p.random_seed);
 
   // Write partition information
-  cout << "will generate " << nParts << " partitions" << endl;
+  cout << "will generate " << p.nParts << " partitions" << endl;
   float xWeightSum = 0.0f;
-  for(unsigned int iPart = 0;iPart < nParts;iPart++)
-    {
-    cout << "   part " << iPart << "\t weight " << xWeights[iPart] << endl;
-    xWeightSum += xWeights[iPart];
-    }
+  for(unsigned int iPart = 0;iPart < p.nParts;iPart++)
+  {
+    cout << "   part " << iPart << "\t weight " << p.xWeights[iPart] << endl;
+    xWeightSum += p.xWeights[iPart];
+  }
   cout << "   total of weights : " << xWeightSum << endl;
-  if(iPlaneDim >= 0)
-    {
-    cout << "will insert cut plane at slice " << iPlaneSlice 
-      << " in dimension " << iPlaneDim 
-      << " with strength " << iPlaneStrength << endl;
-    }
+  if(p.iPlaneDim >= 0)
+  {
+    cout << "will insert cut plane at slice " << p.iPlaneSlice
+         << " in dimension " << p.iPlaneDim
+         << " with strength " << p.iPlaneStrength << endl;
+  }
   cout << endl;
 
   // Read the input image image
@@ -248,11 +147,11 @@ int main(int argc, char *argv[])
 
   typedef ImageFileReader<ImageType> ReaderType;
   ReaderType::Pointer fltReader = ReaderType::New();
-  fltReader->SetFileName(fnInput.c_str());
+  fltReader->SetFileName(p.fnInput.c_str());
   fltReader->Update();
   ImageType::Pointer img = fltReader->GetOutput();
 
-  // Extract connected components
+         // Extract connected components
   typedef itk::ConnectedComponentImageFilter<ImageType, ImageType> ConnFilter;
   ConnFilter::Pointer conn_filter = ConnFilter::New();
   conn_filter->SetInput(img);
@@ -265,33 +164,33 @@ int main(int argc, char *argv[])
   relabel_filter->Update();
   ImageType::Pointer comp_map_image = relabel_filter->GetOutput();
 
-  // Get a list of connected components and their size
-  unsigned int hist_size = max_comp + 1;
+         // Get a list of connected components and their size
+  unsigned int hist_size = p.max_comp + 1;
   std::vector<unsigned int> comp_histogram(hist_size, 0);
   unsigned int n_total = 0;
   for(itk::ImageRegionConstIterator<ImageType> it(comp_map_image, comp_map_image->GetBufferedRegion());
-      !it.IsAtEnd(); ++it)
-    {
+       !it.IsAtEnd(); ++it)
+  {
     short val = it.Value();
     if(val > 0 && val < hist_size)
-      {
+    {
       comp_histogram[val]++;
       n_total++;
-      }
     }
+  }
 
-  // Compute the total number of pixels and proportion of each component
+         // Compute the total number of pixels and proportion of each component
   std::map<short, unsigned int> comp_parts;
   for(unsigned int i = 1; i < hist_size; i++)
-    {
+  {
     double frac = comp_histogram[i] * 1.0 / n_total;
-    if(frac >= min_comp_frac)
-      {
-      int n_parts = std::max(1, (int)(0.5 + nParts * frac));
+    if(frac >= p.min_comp_frac)
+    {
+      int n_parts = std::max(1, (int)(0.5 + p.nParts * frac));
       comp_parts[i] = n_parts;
       std::cout << "Keeping component " << i << " fraction " << frac << " parts " << n_parts << endl;
-      }
     }
+  }
 
   cout << "   image has dimensions " << img->GetBufferedRegion().GetSize()
        << ", nPixels = " << img->GetBufferedRegion().GetNumberOfPixels()
@@ -307,7 +206,7 @@ int main(int argc, char *argv[])
   // Repeat for each component
   unsigned int part_idx = 1;
   for(auto comp : comp_parts)
-    {
+  {
     typedef itk::BinaryThresholdImageFilter<ImageType, ImageType> ThreshFilter;
     ThreshFilter::Pointer fltThresh = ThreshFilter::New();
     fltThresh->SetLowerThreshold(comp.first);
@@ -317,13 +216,13 @@ int main(int argc, char *argv[])
     fltThresh->SetInput(comp_map_image);
     fltThresh->Update();
 
-    // This is the image that we will partition now
+           // This is the image that we will partition now
     ImageType::Pointer comp_image = fltThresh->GetOutput();
 
-    // Use the relative weights only if number of components matches
-    auto compWeights = (xWeights.size() == comp.second)
-        ? xWeights
-        : vnl_vector<float>(comp.second, 1.0/comp.second);
+           // Use the relative weights only if number of components matches
+    auto compWeights = (p.xWeights.size() == comp.second)
+                         ? p.xWeights
+                         : vnl_vector<float>(comp.second, 1.0/comp.second);
 
     cout << "   Breaking component " << comp.first << " into " << comp.second << " parts. " << endl;
     cout << "      Initial weights: " << compWeights << endl;
@@ -331,7 +230,7 @@ int main(int argc, char *argv[])
 
     unsigned int max_part=1;
     if(comp.second > 1)
-      {
+    {
       // Create the weight functor
       MyWeightFunctor fnWeight;
 
@@ -343,54 +242,55 @@ int main(int argc, char *argv[])
       fltGraph->Update();
 
       // If asked to optimize, compute the best set of weights
-      if(flagOptimize)
-        {
+      if(p.flagOptimize)
+      {
         // Run the experimental optimization
         compWeights = OptimizeMETISPartition(fltGraph, compWeights);
         cout << "      Optimized weights: " << compWeights << endl;
-        }
+      }
 
       // Run METIS once, using the specified weights
       int *iPartition = new int[fltGraph->GetNumberOfVertices()];
       int xCut = RunMETISPartition<ImageType>(
         fltGraph, compWeights.size(), compWeights.data_block(), iPartition,
-        tolerance, nMetisIter, false);
+        p.tolerance, p.nMetisIter, false);
       cout << "      Cut value: " << xCut << endl;
 
       // Apply partition to output image
       for(unsigned int iVertex = 0; iVertex < fltGraph->GetNumberOfVertices(); iVertex++)
-        {
+      {
         GraphFilter::IndexType idx = fltGraph->GetVertexImageIndex(iVertex);
         imgOut->SetPixel(idx, iPartition[iVertex] + part_idx);
-	max_part = std::max(max_part, (unsigned int ) iPartition[iVertex]);
-        }
+        max_part = std::max(max_part, (unsigned int ) iPartition[iVertex]);
+      }
 
       // Delete the partition
       delete [] iPartition;
-      }
+    }
     else
-      {
+    {
       typedef itk::ImageRegionIterator<ImageType> IterType;
       IterType it_src(comp_image, comp_image->GetBufferedRegion());
       IterType it_dst(imgOut, imgOut->GetBufferedRegion());
       for(; !it_src.IsAtEnd(); ++it_src, ++it_dst)
         if(it_src.Value() > 0)
           it_dst.Set(part_idx);
-      }
-
-      // Update the starting part
-      part_idx += max_part + 1;
     }
-    
+
+    // Update the starting part
+    part_idx += max_part + 1;
+  }
+
   // Write the image
   cout << "writing output image" << endl;
-  
+
   typedef ImageFileWriter<ImageType> WriterType;
   WriterType::Pointer fltWriter = WriterType::New();
   fltWriter->SetInput(imgOut);
-  fltWriter->SetFileName(fnOutput.c_str());
+  fltWriter->SetFileName(p.fnOutput.c_str());
   fltWriter->Update();
 
   // Done!
   return 0;
 }
+
