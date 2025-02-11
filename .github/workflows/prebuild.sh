@@ -6,13 +6,13 @@ mkdir -p be/install && cd be
 # Build METIS
 git clone https://github.com/KarypisLab/GKlib.git GKlib
 pushd GKlib
-make config shared=0 prefix=../install
+make config shared=0 prefix=/usr/local
 make install
 popd
 
 git clone https://github.com/KarypisLab/METIS.git METIS
 pushd METIS
-make config shared=0 prefix=../install -I../install/include -L../install/lib
+make config shared=0 prefix=/usr/local
 make install
 popd
 
