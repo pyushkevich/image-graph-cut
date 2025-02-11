@@ -20,7 +20,7 @@ cmake \
     -DCMAKE_INSTALL_PREFIX=./install \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -B ITK/build -G Ninja \
+    -B ITK/build \
     ITK
 
 cmake --build ITK/build --target install $MAKEFLAGS
