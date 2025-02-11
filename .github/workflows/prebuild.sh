@@ -7,18 +7,7 @@ mkdir -p be/install && cd be
 if [[ $1 == "macos-13" ||  $1 == "macos-14" ]]; then
   brew install metis
 elif [[ $1 == "ubuntu-20.04" ]]; then
-  # Build METIS
-  git clone https://github.com/KarypisLab/GKlib.git GKlib
-  pushd GKlib
-  make config shared=0 prefix=../install
-  make install
-  popd
-
-  git clone https://github.com/KarypisLab/METIS.git METIS
-  pushd METIS
-  make config shared=0 prefix=../install CFLAGS="-I../install/include -L../install/lib" CXXFLAGS="-I../install/include -L../install/lib"
-  make install
-  popd
+  yum install metis
 fi
 
 
