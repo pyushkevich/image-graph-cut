@@ -7,7 +7,7 @@ mkdir -p be/install && cd be
 if [[ $1 == "macos-13" ||  $1 == "macos-14" ]]; then
   brew install metis
 elif [[ $1 == "ubuntu-20.04" ]]; then
-  apt-get install -y metis
+  apt install -y metis
 fi
 
 # Build ITK
