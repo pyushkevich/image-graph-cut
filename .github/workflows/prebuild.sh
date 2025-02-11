@@ -7,7 +7,7 @@ mkdir -p be/install && cd be
 if [[ $1 == "macos-13" ||  $1 == "macos-14" ]]; then
   brew install metis
 elif [[ $1 == "ubuntu-20.04" ]]; then
-  yum install -y metis
+  yum install -y metis metis-devel
 fi
 
 
