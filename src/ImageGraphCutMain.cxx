@@ -1,5 +1,7 @@
 #include "ImageGraphCut.h"
 #include <iostream>
+#include <cstring>
+#include <cstdlib>
 
 using namespace std;
 
@@ -88,7 +90,6 @@ int main(int argc, char *argv[])
     {
       p.use_random_seed = true;
       p.random_seed = atoi(argv[++iArg]);
-      // srand(atoi(argv[++iArg]));
     }
     else if(!strcmp(argv[iArg], "-u"))
     {
