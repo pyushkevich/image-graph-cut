@@ -5,16 +5,10 @@ mkdir -p be/install && cd be
 
 # Build METIS
 git clone https://github.com/KarypisLab/METIS.git METIS
-cmake \
-    -DBUILD_EXAMPLES=OFF \
-    -DBUILD_TESTING=OFF \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=./install \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -B METIS/build \
-    METIS
-
-cmake --build METIS/build --target install $MAKEFLAGS
+pushd METIS
+make config shared=0 prefix=../install
+make install
+popd
 
 # Build ITK
 git clone -b v5.4.0 https://github.com/InsightSoftwareConsortium/ITK.git ITK
